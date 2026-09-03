@@ -21,5 +21,4 @@ harness/trajectory.jsonl
 harness/sensor_logs/
 harness/output/
 trajectory.jsonl
-.opencode/
 .gitnexus/
