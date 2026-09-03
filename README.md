@@ -1,6 +1,8 @@
 # template-golden-path
 
-Template opencode con **Golden Path Fusión** único — listo para `npx degit`.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![CI](https://github.com/mauriciosoyastor/template-golden-path/actions/workflows/ci.yml/badge.svg)](https://github.com/mauriciosoyastor/template-golden-path/actions)
+
+Template opencode con **Golden Path Fusión** único — listo para `npx degit`. Licencia MIT.
 
 ## Golden Path
 
@@ -38,3 +40,15 @@ Renombra `tu_paquete` en `pyproject.toml:15` y `CONTEXT.md` con tu dominio.
 `CI fail rate <10%` + `harness verify verdict:ok risk:low` + `detect_changes` sin `HIGH` + `pdg:true` `status:current`.
 
 Ver `docs/adr/0007-fusion-three-methodologies.md`.
+
+## License
+
+MIT — ver [LICENSE](LICENSE). Copyright (c) 2026 Mauricio Yastor.
+
+## Contributing
+
+Ver [CONTRIBUTING.md](CONTRIBUTING.md). Usa el Golden Path: `Issue → triage → to-tickets → gitnexus-plan → gitnexus-work → code-review → merge`.
+
+## Security
+
+Ver [SECURITY.md](SECURITY.md).

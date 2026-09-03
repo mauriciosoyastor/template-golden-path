@@ -7,6 +7,15 @@ name = "template-golden-path"
 version = "0.1.0"
 description = "Template Golden Path Fusion — opencode"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+readme = "README.md"
+authors = [{ name = "Mauricio Yastor" }]
+keywords = ["golden-path", "opencode", "gitnexus", "harness"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+]
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy", "pytest"]
