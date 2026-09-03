@@ -1,0 +1,7 @@
+{
+  "intent": "demo: validar harness genérico",
+  "files": ["harness/output/demo.json"],
+  "invariants": ["harness verify verdict:ok risk:low"],
+  "validation": "uv run ruff check . && uv run mypy tu_paquete && uv run pytest -q",
+  "rollback": "rm harness/output/demo.json"
+}

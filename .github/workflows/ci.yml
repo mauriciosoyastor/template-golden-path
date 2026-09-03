@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync workspace
+        run: uv sync --all-packages
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Typecheck
+        run: uv run mypy tu_paquete
+      - name: Tests
+        run: uv run pytest -q
+      - name: CONTEXT linter (ADR-0007)
+        run: uv run python harness/check_context.py
+      - name: Pre-commit guard
+        run: uv run pre-commit run --all-files

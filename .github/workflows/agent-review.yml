@@ -1,0 +1,163 @@
+name: Agent Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: agent-issue-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: startsWith(github.event.pull_request.head.ref, 'agent/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-issues: write
+          permission-checks: read
+
+      - name: Instalar Claude Code CLI (reviewer)
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Levantar proxy LiteLLM (Anthropic -> NVIDIA)
+        run: |
+          pip install "litellm[proxy]==1.97.0" "fastapi==0.136.3" -q
+          cat > /tmp/litellm.yaml <<'EOF'
+          model_list:
+            - model_name: nemotron
+              litellm_params:
+                model: nvidia_nim/deepseek-ai/deepseek-v4-flash-0731
+                api_base: https://integrate.api.nvidia.com/v1
+                api_key: os.environ/NVIDIA_API_KEY
+          router_settings:
+            retries: 5
+            retry_strategy: exponential_backoff_retry
+            cooldown_time: 5
+          EOF
+          litellm --config /tmp/litellm.yaml --port 4000 > /tmp/litellm.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4000/health/liveness >/dev/null 2>&1; then
+              echo "Proxy LiteLLM listo"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Proxy LiteLLM no respondió" >&2
+          tail -n 20 /tmp/litellm.log >&2
+          exit 1
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+
+      - name: Warm-up del modelo NVIDIA (evita cold-start 429)
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /tmp/warmup.json -w "%{http_code}" \
+              -X POST http://127.0.0.1:4000/v1/messages \
+              -H "Authorization: Bearer $NVIDIA_API_KEY" \
+              -H "Content-Type: application/json" \
+              -H "anthropic-version: 2023-06-01" \
+              -d '{"model":"nemotron","max_tokens":8,"messages":[{"role":"user","content":"ping"}]}')
+            if [ "$code" = "200" ]; then
+              echo "Warm-up OK"
+              exit 0
+            fi
+            echo "warm-up intento $i -> HTTP $code"
+            sleep 5
+          done
+          echo "Warm-up falló tras 10 intentos" >&2
+          tail -n 30 /tmp/litellm.log >&2
+          exit 1
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+
+      - name: Review con red-team
+        id: review
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ANTHROPIC_BASE_URL: http://127.0.0.1:4000
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.NVIDIA_API_KEY }}
+          ANTHROPIC_MODEL: nemotron
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          bash .github/scripts/run_agent.sh review
+
+      - name: Aprobar
+        if: steps.review.outputs.verdict == 'approve'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          SUMMARY: ${{ steps.review.outputs.summary }}
+        run: |
+          body=$(cat <<'EOF'
+          ## Agent Review: aprobado
+
+          ${{ env.SUMMARY }}
+          EOF
+          )
+          jq -n --arg b "$body" '{event:"APPROVE", body:$b}' \
+            | gh api -X POST "repos/${{ github.repository }}/pulls/${{ env.PULL_NUMBER }}/reviews" --input -
+
+      - name: Pedir cambios (iter < 3) y re-disparar coder
+        if: steps.review.outputs.verdict == 'request_changes' && fromJSON(steps.review.outputs.iteration) < 3
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ steps.review.outputs.issue }}
+          ITERATION: ${{ steps.review.outputs.iteration }}
+          SUMMARY: ${{ steps.review.outputs.summary }}
+        run: |
+          next=$((ITERATION + 1))
+          body=$(cat <<'EOF'
+          ## Agent Review: cambios solicitados
+
+          ${{ env.SUMMARY }}
+          EOF
+          )
+          jq -n --arg b "$body" '{event:"REQUEST_CHANGES", body:$b}' \
+            | gh api -X POST "repos/${{ github.repository }}/pulls/${{ env.PULL_NUMBER }}/reviews" --input -
+          if gh workflow view agent-implement.yml --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            GH_TOKEN="${{ github.token }}" gh workflow run agent-implement.yml \
+              -f issue_number="$ISSUE_NUMBER" \
+              -f pull_number="$PULL_NUMBER" \
+              -f iteration="$next" || echo "::warning:: dispatch agent-implement falló (ignorado)"
+          else
+            echo "::warning:: agent-implement.yml no existe o está deshabilitado (.disabled) — skipping dispatch"
+          fi
+
+      - name: Agotar loop → needs-human-attention
+        if: steps.review.outputs.verdict == 'request_changes' && fromJSON(steps.review.outputs.iteration) >= 3
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          ISSUE_NUMBER: ${{ steps.review.outputs.issue }}
+        run: |
+          body=$(cat <<'EOF'
+          ## Agent Review: cambios solicitados (loop agotado)
+
+          El pipeline alcanzó el límite de 3 iteraciones. Se requiere atención humana.
+          EOF
+          )
+          jq -n --arg b "$body" '{event:"REQUEST_CHANGES", body:$b}' \
+            | gh api -X POST "repos/${{ github.repository }}/pulls/${{ env.PULL_NUMBER }}/reviews" --input -
+          if [[ -n "$ISSUE_NUMBER" ]]; then
+            gh issue edit "$ISSUE_NUMBER" --remove-label agent:in-progress --add-label needs-human-attention
+          fi
